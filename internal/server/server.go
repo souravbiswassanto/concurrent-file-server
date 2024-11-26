@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"log"
@@ -100,18 +101,16 @@ func (fs *FileServer) Run(ch util.ConnHandler) {
 	}()
 
 	for {
-
-		log.Println(1)
 		conn, err := fs.listener.AcceptTCP()
 		if err != nil {
-			if opErr, ok := err.(*net.OpError); ok && opErr.Err == net.ErrClosed {
+			var opErr *net.OpError
+			if errors.As(err, &opErr) && errors.Is(opErr.Err, net.ErrClosed) {
 				log.Println("Listener was closed")
 				break
 			}
 			errStream <- err
 			continue
 		}
-		log.Println(2)
 		fs.wg.Add(1)
 		go fs.handleConn(conn, ch, errStream)
 	}
