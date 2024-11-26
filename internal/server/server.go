@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
+	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"log"
 	"net"
 	"os"
@@ -11,24 +13,25 @@ import (
 	"syscall"
 )
 
-type HandleFunc func(conn *net.TCPConn) error
-
 type FileServer struct {
-	listener *net.TCPListener
-	port     string
-	ip       string
-	wg       sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	listener        *net.TCPListener
+	port            string
+	ip              string
+	wg              sync.WaitGroup
+	ctx             context.Context
+	cancel          context.CancelFunc
+	mu              sync.RWMutex
+	isServerRunning bool
 }
 
-func NewFileServer(ctx context.Context, port, ip string) FileServer {
+func NewFileServer(ctx context.Context, ip, port string) FileServer {
 	ctx, cancel := context.WithCancel(ctx)
 	return FileServer{
-		port:   port,
-		ip:     ip,
-		ctx:    ctx,
-		cancel: cancel,
+		port:            port,
+		ip:              ip,
+		ctx:             ctx,
+		cancel:          cancel,
+		isServerRunning: true,
 	}
 }
 
@@ -44,9 +47,11 @@ func (fs *FileServer) resolveTcpAddr() (*net.TCPAddr, error) {
 
 func (fs *FileServer) setupTCPListener() error {
 	addr, err := fs.resolveTcpAddr()
+	log.Println(err)
 	if err != nil {
 		return err
 	}
+	log.Println(addr.String())
 	fs.listener, err = net.ListenTCP("tcp", addr)
 	return err
 }
@@ -56,24 +61,38 @@ func (fs *FileServer) Start() error {
 }
 
 func (fs *FileServer) Shutdown() {
+	fs.mu.Lock()
+	if !fs.isServerRunning {
+		return
+	}
 	if fs.listener != nil {
 		fs.listener.Close()
 	}
 	fs.cancel()
+	log.Println("Got shutdown request. Waiting for active processes to shutdown.")
 	fs.wg.Wait()
+	log.Println("All the process cleaned properly. Shutting Down")
+	fs.isServerRunning = false
+	fs.mu.Unlock()
 }
 
-func (fs *FileServer) Run(handleFn HandleFunc) {
+func (fs *FileServer) Run(ch util.ConnHandler) {
 	errStream := make(chan error, 1)
 	sigStream := make(chan os.Signal, 1)
 	signal.Notify(sigStream, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
+		select {
+		case <-fs.ctx.Done():
+			fs.Shutdown()
+			return
+		case <-sigStream:
+			fs.Shutdown()
+			return
+		}
+	}()
+	go func() {
 		for {
 			select {
-			case <-fs.ctx.Done():
-				return
-			case <-sigStream:
-				return
 			case err := <-errStream:
 				log.Println(err)
 			}
@@ -81,36 +100,45 @@ func (fs *FileServer) Run(handleFn HandleFunc) {
 	}()
 
 	for {
-		select {
-		case <-fs.ctx.Done():
-			return
-		case <-sigStream:
-			return
-		default:
-			conn, err := fs.listener.AcceptTCP()
-			if err != nil {
-				errStream <- err
-				continue
-			}
 
-			fs.wg.Add(1)
-			go func(tc *net.TCPConn) {
-				select {
-				case <-fs.ctx.Done():
-					return
-				default:
-					err := handleFn(tc)
-					if err != nil {
-						errStream <- err
-					}
-				}
-				defer fs.wg.Done()
-			}(conn)
+		log.Println(1)
+		conn, err := fs.listener.AcceptTCP()
+		if err != nil {
+			if opErr, ok := err.(*net.OpError); ok && opErr.Err == net.ErrClosed {
+				log.Println("Listener was closed")
+				break
+			}
+			errStream <- err
+			continue
 		}
+		log.Println(2)
+		fs.wg.Add(1)
+		go fs.handleConn(conn, ch, errStream)
 	}
 }
 
-func handleConn(conn *net.TCPConn) error {
+func (fs *FileServer) handleConn(conn *net.TCPConn, ch util.ConnHandler, errStream chan error) {
+	workDone := make(chan bool)
+	go func() {
+		select {
+		case <-fs.ctx.Done():
+			conn.Close()
+			fs.wg.Done()
+			return
+		case <-workDone:
+			conn.Close()
+			fs.wg.Done()
+			return
+		}
+	}()
+	err := ch.HandleConn(fs.ctx, conn)
+	if err != nil {
+		errStream <- fmt.Errorf("err handling connection %v", err)
+	}
+	<-workDone
+}
+
+func sampleHandleConn(conn *net.TCPConn) error {
 	var sz uint32
 	defer conn.Close()
 	temp := make([]byte, 4)
@@ -128,7 +156,7 @@ func handleConn(conn *net.TCPConn) error {
 }
 
 func SetupServer() (FileServer, error) {
-	srv := NewFileServer(context.Background(), "127.0.0.1", "8000")
+	srv := NewFileServer(context.Background(), "127.0.0.1", "8080")
 	err := srv.Start()
 	if err != nil {
 		return srv, err
@@ -136,11 +164,12 @@ func SetupServer() (FileServer, error) {
 	return srv, nil
 }
 
-func SetupAndRunServer(fn HandleFunc) error {
+func SetupAndRunServer(ch util.ConnHandler) error {
 	srv, err := SetupServer()
 	if err != nil {
 		return err
 	}
-	srv.Run(fn)
+	defer srv.Shutdown()
+	srv.Run(ch)
 	return nil
 }
