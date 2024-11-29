@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
+
 	"log"
 	"net"
 	"os"
@@ -22,7 +24,7 @@ type FileServer struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	mu              sync.RWMutex
-	isServerRunning bool
+	isServerRunning *bool
 }
 
 func NewFileServer(ctx context.Context, ip, port string) FileServer {
@@ -32,7 +34,7 @@ func NewFileServer(ctx context.Context, ip, port string) FileServer {
 		ip:              ip,
 		ctx:             ctx,
 		cancel:          cancel,
-		isServerRunning: true,
+		isServerRunning: nil,
 	}
 }
 
@@ -48,12 +50,14 @@ func (fs *FileServer) resolveTcpAddr() (*net.TCPAddr, error) {
 
 func (fs *FileServer) setupTCPListener() error {
 	addr, err := fs.resolveTcpAddr()
-	log.Println(err)
 	if err != nil {
 		return err
 	}
-	log.Println(addr.String())
 	fs.listener, err = net.ListenTCP("tcp", addr)
+	if err == nil {
+		fs.isServerRunning = aws.Bool(true)
+		log.Println("listening at:", addr.String())
+	}
 	return err
 }
 
@@ -61,9 +65,16 @@ func (fs *FileServer) Start() error {
 	return fs.setupTCPListener()
 }
 
+func (fs *FileServer) IsServerRunning() bool {
+	if fs.isServerRunning != nil && *fs.isServerRunning {
+		return true
+	}
+	return false
+}
+
 func (fs *FileServer) Shutdown() {
 	fs.mu.Lock()
-	if !fs.isServerRunning {
+	if fs.isServerRunning != nil && !*fs.isServerRunning {
 		return
 	}
 	if fs.listener != nil {
@@ -73,7 +84,7 @@ func (fs *FileServer) Shutdown() {
 	log.Println("Got shutdown request. Waiting for active processes to shutdown.")
 	fs.wg.Wait()
 	log.Println("All the process cleaned properly. Shutting Down")
-	fs.isServerRunning = false
+	fs.isServerRunning = aws.Bool(false)
 	fs.mu.Unlock()
 }
 
@@ -155,7 +166,7 @@ func sampleHandleConn(conn *net.TCPConn) error {
 }
 
 func SetupServer() (FileServer, error) {
-	srv := NewFileServer(context.Background(), "127.0.0.1", "8080")
+	srv := NewFileServer(context.Background(), readIP(), readPort())
 	err := srv.Start()
 	if err != nil {
 		return srv, err
@@ -171,4 +182,11 @@ func SetupAndRunServer(ch util.ConnHandler) error {
 	defer srv.Shutdown()
 	srv.Run(ch)
 	return nil
+}
+
+func readIP() string {
+	return os.Getenv("SERVER_IP")
+}
+func readPort() string {
+	return os.Getenv("SERVER_PORT")
 }

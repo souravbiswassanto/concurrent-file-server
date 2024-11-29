@@ -2,8 +2,8 @@ package client
 
 import (
 	"context"
-	"io"
-	"log"
+	"fmt"
+	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"net"
 	"os"
 	"sync"
@@ -13,10 +13,13 @@ type FileClient struct {
 	ctx                            context.Context
 	wg                             sync.WaitGroup
 	ip, serverIP, port, serverPort string
+	conn                           *net.TCPConn
 }
 
-func (fc *FileClient) DefaultSetup() {
-	fc.Setup("127.0.0.1", "8081")
+func NewFileClient(ip, port string) *FileClient {
+	fc := FileClient{}
+	fc.Setup(ip, port)
+	return &fc
 }
 
 func (fc *FileClient) Setup(ip, port string) {
@@ -28,9 +31,9 @@ func (fc *FileClient) Setup(ip, port string) {
 func (fc *FileClient) SetupServer() {
 	serverIP := os.Getenv("SERVER_IP")
 	serverPort := os.Getenv("SERVER_PORT")
-	if serverIP == "" || serverPort == "" {
-		log.Fatalln("Provide SERVER_IP and SERVER_PORT env variables")
-	}
+	//if serverIP == "" || serverPort == "" {
+	//	log.Fatalln("Provide SERVER_IP and SERVER_PORT env variables")
+	//}
 	fc.serverIP = serverIP
 	fc.serverPort = serverPort
 }
@@ -49,37 +52,63 @@ func (fs *FileClient) resolveTcpAddr() (*net.TCPAddr, error) {
 	return net.ResolveTCPAddr("tcp", fs.ip+":"+fs.port)
 }
 
-func (fc *FileClient) Start() {
+func (fc *FileClient) clientAddr() (*net.TCPAddr, error) {
+	cip := fc.ip
+	cport := fc.port
+	if cip == "" || cport == "" {
+		return nil, nil
+	}
 	clientAddr, err := fc.resolveTcpAddr()
 	if err != nil {
-		log.Fatalln(err)
+		return nil, err
+	}
+	return clientAddr, nil
+}
+
+func (fc *FileClient) Start() error {
+	cAddr, err := fc.clientAddr()
+	if err != nil {
+		return err
 	}
 	serverAddr, err := fc.resolveServerTcpAddr()
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
-	conn, err := net.DialTCP("tcp", clientAddr, serverAddr)
+	conn, err := net.DialTCP("tcp", cAddr, serverAddr)
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
-	handleConn(conn)
+	fc.conn = conn
+	return nil
 }
 
-func handleConn(conn *net.TCPConn) {
-	fd, err := os.Open("internal/client/client.go")
-	if err != nil {
-		log.Println("err occoured: ", err)
-		return
+//func (fc *FileClient) handleConn(conn *net.TCPConn) {
+//	//fd, err := os.Open("internal/client/client.go")
+//	//if err != nil {
+//	//	log.Println("err occoured: ", err)
+//	//	return
+//	//}
+//	//data, err := io.ReadAll(fd)
+//	//if err != nil {
+//	//	log.Println("err occoured: ", err)
+//	//	return
+//	//}
+//	//n, err := conn.Write(data)
+//	//if err != nil {
+//	//	log.Println("err: ", err)
+//	//	return
+//	//}
+//	//log.Println("sent ", n, "bytes over network")
+//
+//}
+
+func (fc *FileClient) GetConnection() (*net.TCPConn, error) {
+	if fc.conn == nil {
+		return nil, fmt.Errorf("the connections is closed, start a new connection by running Start()")
 	}
-	data, err := io.ReadAll(fd)
-	if err != nil {
-		log.Println("err occoured: ", err)
-		return
-	}
-	n, err := conn.Write(data)
-	if err != nil {
-		log.Println("err: ", err)
-		return
-	}
-	log.Println("sent ", n, "bytes over network")
+	return fc.conn, nil
+}
+
+func (fc *FileClient) HandleUpload(uh util.HandleFunc) {
+
 }
