@@ -1,8 +1,11 @@
-package client
+package tcp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	client_config "github.com/souravbiswassanto/concurrent-file-server/cmd/client"
+	"github.com/souravbiswassanto/concurrent-file-server/internal/client"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"io"
 	"log"
@@ -11,8 +14,23 @@ import (
 )
 
 type UploadHandler struct {
-	fc *FileClient
+	fc *client.FileClient
 	h  *util.Header
+}
+
+func NewUploadHandler(ctx context.Context, uc client_config.UploadConfig) (*UploadHandler, error) {
+	fc, err := client.NewFileClient(ctx, uc.CIP, uc.CPort, uc.SIP, uc.SPort)
+	if err != nil {
+		return nil, err
+	}
+	h, err := util.NewHeader(uc.File, uint32(uc.ChunkSize))
+	if err != nil {
+		return nil, err
+	}
+	return &UploadHandler{
+		fc: fc,
+		h:  h,
+	}, nil
 }
 
 func (uh *UploadHandler) HandleConn() error {

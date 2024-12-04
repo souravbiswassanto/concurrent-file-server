@@ -3,6 +3,8 @@ package util
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 type Header struct {
@@ -11,6 +13,23 @@ type Header struct {
 	Reps      uint64
 	ChunkSize uint32
 	Dir       string
+}
+
+func NewHeader(file string, chunkSize uint32) (*Header, error) {
+	if chunkSize < uint32(16) {
+		return nil, fmt.Errorf("please provide a bigger chunksize")
+	}
+	stat, err := os.Stat(file)
+	if err != nil {
+		return nil, err
+	}
+	return &Header{
+		FileName:  filepath.Base(file),
+		FileSize:  uint64(stat.Size()),
+		Reps:      uint64(stat.Size()/int64(chunkSize) + 1),
+		ChunkSize: chunkSize,
+		Dir:       filepath.Dir(file),
+	}, nil
 }
 
 // Serialize converts the Header struct to a byte slice

@@ -3,83 +3,90 @@ package client
 import (
 	"context"
 	"fmt"
+	"github.com/souravbiswassanto/concurrent-file-server/cmd/client"
+	"github.com/souravbiswassanto/concurrent-file-server/internal/tcp"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
+	"log"
 	"net"
 	"os"
 	"sync"
 )
 
 type FileClient struct {
-	ctx                            context.Context
-	wg                             sync.WaitGroup
-	ip, serverIP, port, serverPort string
-	conn                           *net.TCPConn
+	ctx          context.Context
+	wg           sync.WaitGroup
+	cAddr, sAddr *net.TCPAddr
+	ch           util.ConnHandler
 }
 
-func NewFileClient(ip, port string) *FileClient {
+func NewFileClient(ctx context.Context, cIP, cPort, sIP, sPort string) (*FileClient, error) {
 	fc := FileClient{}
-	fc.Setup(ip, port)
-	return &fc
-}
-
-func (fc *FileClient) Setup(ip, port string) {
-	fc.ip = ip
-	fc.port = port
-	fc.SetupServer()
-}
-
-func (fc *FileClient) SetupServer() {
-	serverIP := os.Getenv("SERVER_IP")
-	serverPort := os.Getenv("SERVER_PORT")
-	//if serverIP == "" || serverPort == "" {
-	//	log.Fatalln("Provide SERVER_IP and SERVER_PORT env variables")
-	//}
-	fc.serverIP = serverIP
-	fc.serverPort = serverPort
-}
-
-func (fs *FileClient) resolveServerTcpAddr() (*net.TCPAddr, error) {
-	return net.ResolveTCPAddr("tcp", fs.serverIP+":"+fs.serverPort)
-}
-
-func (fs *FileClient) resolveTcpAddr() (*net.TCPAddr, error) {
-	if fs.ip == "" {
-		fs.ip = "127.0.0.1"
-	}
-	if fs.port == "" {
-		fs.port = "8080"
-	}
-	return net.ResolveTCPAddr("tcp", fs.ip+":"+fs.port)
-}
-
-func (fc *FileClient) clientAddr() (*net.TCPAddr, error) {
-	cip := fc.ip
-	cport := fc.port
-	if cip == "" || cport == "" {
-		return nil, nil
-	}
-	clientAddr, err := fc.resolveTcpAddr()
+	fc.ctx = ctx
+	cAddr, err := fc.clientAddr(cIP, cPort)
 	if err != nil {
 		return nil, err
 	}
-	return clientAddr, nil
+	sAddr, err := fc.resolveServerTcpAddr(sIP, sPort)
+	if err != nil {
+		return nil, err
+	}
+	fc.cAddr = cAddr
+	fc.sAddr = sAddr
+	return &fc, nil
 }
 
-func (fc *FileClient) Start() error {
-	cAddr, err := fc.clientAddr()
-	if err != nil {
-		return err
+func (fs *FileClient) resolveServerTcpAddr(sIP, sPort string) (*net.TCPAddr, error) {
+	if sIP == "" || sPort == "" {
+		sIP = os.Getenv("SERVER_IP")
+		sPort = os.Getenv("SERVER_PORT")
 	}
-	serverAddr, err := fc.resolveServerTcpAddr()
-	if err != nil {
-		return err
+	if sIP == "" || sPort == "" {
+		return nil, fmt.Errorf("either provide -P port -I ip or set SERVER_IP SERVER_PORT")
 	}
-	conn, err := net.DialTCP("tcp", cAddr, serverAddr)
-	if err != nil {
-		return err
+	return net.ResolveTCPAddr("tcp", sIP+":"+sPort)
+}
+
+func (fs *FileClient) resolveTcpAddr(cIP, cPort string) (*net.TCPAddr, error) {
+	return net.ResolveTCPAddr("tcp", cIP+":"+cPort)
+}
+
+func (fc *FileClient) clientAddr(cIP, cPort string) (*net.TCPAddr, error) {
+	if cIP == "" || cPort == "" {
+		log.Println("client port or IP not given, using defaults")
+		return nil, nil
 	}
-	fc.conn = conn
-	return nil
+	return fc.resolveTcpAddr(cIP, cPort)
+}
+
+func (fc *FileClient) DialTCPWithContext() (*net.TCPConn, error) {
+	connStream := make(chan *net.TCPConn)
+	errStream := make(chan error)
+	// this part of the code is inspired from
+	// github.com/kubedb/pg-coordinator/pkg/listener.go
+
+	go func() {
+		dialer := &net.Dialer{}
+		conn, err := dialer.DialContext(fc.ctx, "tcp", fc.sAddr.String())
+		if err != nil {
+			errStream <- err
+			return
+		}
+		tcpConn, ok := conn.(*net.TCPConn)
+		if !ok {
+			conn.Close()
+			errStream <- fmt.Errorf("unexpected connection type")
+		}
+		connStream <- tcpConn
+	}()
+
+	select {
+	case <-fc.ctx.Done():
+		return nil, fmt.Errorf("connection dropped")
+	case t := <-connStream:
+		return t, nil
+	case err := <-errStream:
+		return nil, err
+	}
 }
 
 //func (fc *FileClient) handleConn(conn *net.TCPConn) {
@@ -102,13 +109,26 @@ func (fc *FileClient) Start() error {
 //
 //}
 
-func (fc *FileClient) GetConnection() (*net.TCPConn, error) {
-	if fc.conn == nil {
-		return nil, fmt.Errorf("the connections is closed, start a new connection by running Start()")
+func GetHandler(ctx context.Context, uc client.UploadConfig) (util.ConnHandler, error) {
+
+	switch uc.Protocol {
+	case "tcp":
+		th, err := tcp.NewUploadHandler(ctx, uc)
+		if err != nil {
+			return nil, err
+		}
+		return th, nil
 	}
-	return fc.conn, nil
+	return nil, fmt.Errorf("no connection type matched")
 }
 
-func (fc *FileClient) HandleUpload(uh util.HandleFunc) {
+func HandleUpload(uc client.UploadConfig) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h, err := GetHandler(ctx, uc)
+	if err != nil {
+		return err
+	}
 
+	return h.HandleConn()
 }
