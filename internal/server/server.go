@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -88,23 +87,19 @@ func (fs *FileServer) Shutdown() {
 	fs.mu.Unlock()
 }
 
-func (fs *FileServer) Run(ch util.ConnHandler) {
+func (fs *FileServer) Run() {
 	errStream := make(chan error, 1)
 	sigStream := make(chan os.Signal, 1)
-	signal.Notify(sigStream, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		select {
-		case <-fs.ctx.Done():
-			fs.Shutdown()
-			return
-		case <-sigStream:
-			fs.Shutdown()
-			return
-		}
-	}()
+	signal.Notify(sigStream, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGABRT)
 	go func() {
 		for {
 			select {
+			case <-fs.ctx.Done():
+				fs.Shutdown()
+				return
+			case <-sigStream:
+				fs.Shutdown()
+				return
 			case err := <-errStream:
 				log.Println(err)
 			}
@@ -117,17 +112,22 @@ func (fs *FileServer) Run(ch util.ConnHandler) {
 			var opErr *net.OpError
 			if errors.As(err, &opErr) && errors.Is(opErr.Err, net.ErrClosed) {
 				log.Println("Listener was closed")
+				fs.Shutdown()
 				break
 			}
-			errStream <- err
+			if conn != nil {
+				errStream <- fmt.Errorf("can't accept the connection from %v, err: %v", conn.RemoteAddr(), err)
+			} else {
+				errStream <- err
+			}
 			continue
 		}
 		fs.wg.Add(1)
-		go fs.handleConn(conn, ch, errStream)
+		go fs.handleConn(conn, errStream)
 	}
 }
 
-func (fs *FileServer) handleConn(conn *net.TCPConn, ch util.ConnHandler, errStream chan error) {
+func (fs *FileServer) handleConn(conn *net.TCPConn, errStream chan error) {
 	workDone := make(chan bool)
 	go func() {
 		select {
@@ -141,28 +141,12 @@ func (fs *FileServer) handleConn(conn *net.TCPConn, ch util.ConnHandler, errStre
 			return
 		}
 	}()
-	err := ch.HandleConn(fs.ctx, conn)
+	h := NewConnectionHandler(conn, &util.Header{})
+	err := h.HandleConn()
 	if err != nil {
 		errStream <- fmt.Errorf("err handling connection %v", err)
 	}
 	<-workDone
-}
-
-func sampleHandleConn(conn *net.TCPConn) error {
-	var sz uint32
-	defer conn.Close()
-	temp := make([]byte, 4)
-	n, err := conn.Read(temp)
-	if err != nil {
-		return err
-	}
-	sz = binary.BigEndian.Uint32(temp[:])
-	log.Println(n, sz)
-	_, err = conn.Write([]byte("string received"))
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func SetupServer() (FileServer, error) {
@@ -174,13 +158,13 @@ func SetupServer() (FileServer, error) {
 	return srv, nil
 }
 
-func SetupAndRunServer(ch util.ConnHandler) error {
+func SetupAndRunServer() error {
 	srv, err := SetupServer()
 	if err != nil {
 		return err
 	}
 	defer srv.Shutdown()
-	srv.Run(ch)
+	srv.Run()
 	return nil
 }
 

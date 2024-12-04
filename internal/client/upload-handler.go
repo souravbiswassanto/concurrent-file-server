@@ -16,7 +16,6 @@ type UploadHandler struct {
 }
 
 func (uh *UploadHandler) HandleConn() error {
-
 	fname := filepath.Join(uh.h.Dir, uh.h.FileName)
 	fd, err := os.Open(fname)
 	if err != nil {
@@ -54,7 +53,7 @@ func (uh *UploadHandler) HandleConn() error {
 		if err != nil && err != io.EOF {
 			return err
 		}
-		_, err = io.Copy(conn, bytes.NewReader(buf))
+		_, err = io.CopyN(conn, bytes.NewReader(buf), int64(uh.h.ChunkSize))
 		if err != nil {
 			return err
 		}
