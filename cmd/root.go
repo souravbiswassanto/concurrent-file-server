@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	cmc "github.com/souravbiswassanto/concurrent-file-server/cmd/client"
 	cms "github.com/souravbiswassanto/concurrent-file-server/cmd/server"
 	"os"
 
@@ -22,7 +23,7 @@ var rootCmd = &cobra.Command{
 		ip := os.Getenv("SERVER_IP")
 		port := os.Getenv("SERVER_PORT")
 		if port == "" || ip == "" {
-			return fmt.Errorf("ip and port can't be empty")
+			return fmt.Errorf("SERVER_IP and SERVER_PORT env variable can't be empty")
 		}
 		return nil
 	},
@@ -50,5 +51,6 @@ func init() {
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.AddCommand(cms.AddStartCmd())
+	rootCmd.AddCommand(cmc.UploadCMD())
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

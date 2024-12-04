@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	client_config "github.com/souravbiswassanto/concurrent-file-server/cmd/client"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/client"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"io"
@@ -18,7 +17,7 @@ type UploadHandler struct {
 	h  *util.Header
 }
 
-func NewUploadHandler(ctx context.Context, uc client_config.UploadConfig) (*UploadHandler, error) {
+func NewUploadHandler(ctx context.Context, uc util.UploadConfig) (*UploadHandler, error) {
 	fc, err := client.NewFileClient(ctx, uc.CIP, uc.CPort, uc.SIP, uc.SPort)
 	if err != nil {
 		return nil, err

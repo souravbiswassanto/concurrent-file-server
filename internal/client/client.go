@@ -3,8 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"github.com/souravbiswassanto/concurrent-file-server/cmd/client"
-	"github.com/souravbiswassanto/concurrent-file-server/internal/tcp"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"log"
 	"net"
@@ -108,27 +106,3 @@ func (fc *FileClient) DialTCPWithContext() (*net.TCPConn, error) {
 //	//log.Println("sent ", n, "bytes over network")
 //
 //}
-
-func GetHandler(ctx context.Context, uc client.UploadConfig) (util.ConnHandler, error) {
-
-	switch uc.Protocol {
-	case "tcp":
-		th, err := tcp.NewUploadHandler(ctx, uc)
-		if err != nil {
-			return nil, err
-		}
-		return th, nil
-	}
-	return nil, fmt.Errorf("no connection type matched")
-}
-
-func HandleUpload(uc client.UploadConfig) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	h, err := GetHandler(ctx, uc)
-	if err != nil {
-		return err
-	}
-
-	return h.HandleConn()
-}

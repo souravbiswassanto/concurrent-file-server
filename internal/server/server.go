@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/souravbiswassanto/concurrent-file-server/internal/handler"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 
 	"log"
@@ -128,7 +129,7 @@ func (fs *FileServer) Run() {
 }
 
 func (fs *FileServer) handleConn(conn *net.TCPConn, errStream chan error) {
-	workDone := make(chan bool)
+	workDone := make(chan struct{})
 	go func() {
 		select {
 		case <-fs.ctx.Done():
@@ -141,12 +142,12 @@ func (fs *FileServer) handleConn(conn *net.TCPConn, errStream chan error) {
 			return
 		}
 	}()
-	h := NewConnectionHandler(conn, &util.Header{})
+	h := handler.NewConnectionHandler(conn, &util.Header{})
 	err := h.HandleConn()
 	if err != nil {
 		errStream <- fmt.Errorf("err handling connection %v", err)
 	}
-	<-workDone
+	workDone <- struct{}{}
 }
 
 func SetupServer() (FileServer, error) {
