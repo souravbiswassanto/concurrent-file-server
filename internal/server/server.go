@@ -74,6 +74,7 @@ func (fs *FileServer) IsServerRunning() bool {
 
 func (fs *FileServer) Shutdown() {
 	fs.mu.Lock()
+	defer fs.mu.Unlock()
 	if fs.isServerRunning != nil && !*fs.isServerRunning {
 		return
 	}
@@ -85,7 +86,7 @@ func (fs *FileServer) Shutdown() {
 	fs.wg.Wait()
 	log.Println("All the process cleaned properly. Shutting Down")
 	fs.isServerRunning = aws.Bool(false)
-	fs.mu.Unlock()
+
 }
 
 func (fs *FileServer) Run() {
@@ -111,6 +112,7 @@ func (fs *FileServer) Run() {
 		conn, err := fs.listener.AcceptTCP()
 		if err != nil {
 			var opErr *net.OpError
+			log.Println(err)
 			if errors.As(err, &opErr) && errors.Is(opErr.Err, net.ErrClosed) {
 				log.Println("Listener was closed")
 				fs.Shutdown()
