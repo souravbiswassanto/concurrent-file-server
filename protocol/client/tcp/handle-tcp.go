@@ -107,7 +107,6 @@ func (uh *UploadHandler) HandleSend(conn *net.TCPConn, fd *os.File) error {
 		if i == uh.h.Reps {
 			sz = uh.h.FileSize % uint64(uh.h.ChunkSize)
 		}
-		log.Println(i, sz)
 		buf := make([]byte, sz)
 		n, err := fd.ReadAt(buf, int64(offset))
 		if err != nil && err != io.EOF {

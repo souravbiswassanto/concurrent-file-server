@@ -124,6 +124,7 @@ func (h *ConnectionHandler) HandleReceive(fd *os.File) error {
 			return err
 		}
 		offset += int64(sz)
+		// time.Sleep(time.Millisecond * 200)
 	}
 	return nil
 }
