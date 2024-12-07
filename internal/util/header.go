@@ -26,7 +26,7 @@ func NewHeader(file string, chunkSize uint32) (*Header, error) {
 	return &Header{
 		FileName:  filepath.Base(file),
 		FileSize:  uint64(stat.Size()),
-		Reps:      uint64(stat.Size()/int64(chunkSize) + 1),
+		Reps:      uint64(stat.Size() / int64(chunkSize)),
 		ChunkSize: chunkSize,
 		Dir:       filepath.Dir(file),
 	}, nil

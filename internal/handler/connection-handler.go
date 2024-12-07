@@ -2,9 +2,11 @@ package handler
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,38 +25,105 @@ func NewConnectionHandler(conn *net.TCPConn, h *util.Header) *ConnectionHandler 
 
 }
 
-func (uh *ConnectionHandler) HandleConn() error {
-	var header []byte
-	n, err := uh.conn.Read(header)
+func (h *ConnectionHandler) HandleConn() error {
+	err := h.Handshake()
 	if err != nil {
 		return err
 	}
-	fmt.Println("Header size is ", n)
-	err = uh.h.Deserialize(header)
+	err = h.HandleHeader()
 	if err != nil {
 		return err
 	}
-	fileName := filepath.Join(uh.h.Dir, uh.h.FileName)
-	_, err = os.Stat(fileName)
+	fd, err := h.HandleFile()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = fd.Close()
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}()
+	return h.HandleReceive(fd)
+}
+
+func (h *ConnectionHandler) Handshake() error {
+	temp := make([]byte, 4)
+	n, err := h.conn.Read(temp)
+	if err != nil {
+		return err
+	}
+	log.Println(n, "bytes initial data received")
+	if n != 4 {
+		return fmt.Errorf("not a valid header")
+	}
+	_, err = h.conn.Write(temp)
+	return err
+}
+
+func (h *ConnectionHandler) HandleHeader() error {
+	headerLen := make([]byte, 4)
+	_, err := h.conn.Read(headerLen)
+	if err != nil {
+		return err
+	}
+	hLen := binary.BigEndian.Uint32(headerLen[:])
+	var header bytes.Buffer
+	_, err = io.CopyN(&header, h.conn, int64(hLen))
+	if err != nil {
+		return err
+	}
+	return h.h.Deserialize(header.Bytes())
+}
+
+func (h *ConnectionHandler) HandleFile() (*os.File, error) {
+	fileName := filepath.Join(h.h.Dir, h.h.FileName)
+	fileName = filepath.Join("storage", fileName)
+	fmt.Println(fileName, h.h.ChunkSize)
 	var fd *os.File
+	_, err := os.Stat(fileName)
 	if os.IsNotExist(err) {
+		dir := filepath.Dir(fileName)
+		err = os.MkdirAll(dir, 0775)
+		if err != nil {
+			return nil, err
+		}
 		fd, err = os.Create(fileName)
+		if err != nil {
+			return nil, err
+		}
+	} else if err == nil {
+		fd, err = os.OpenFile(fileName, os.O_RDWR, 0775)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		fd, err = os.Open(fileName)
+		return nil, err
 	}
-	if err != nil {
-		return err
-	}
+	log.Println(fd.Name())
+	return fd, nil
+}
+
+func (h *ConnectionHandler) HandleReceive(fd *os.File) error {
 	offset := int64(0)
-	for i := uint64(0); i < uh.h.Reps; i++ {
-		buf := make([]byte, uh.h.ChunkSize)
-		n, err := io.CopyN(bytes.NewBuffer(buf), uh.conn, int64(uh.h.ChunkSize))
+	var sz uint64
+	for i := uint64(0); i <= h.h.Reps; i++ {
+		sz = uint64(h.h.ChunkSize)
+		if i == h.h.Reps {
+			sz = h.h.FileSize % uint64(h.h.ChunkSize)
+		}
+		var temp bytes.Buffer
+		n, err := io.CopyN(&temp, h.conn, int64(sz))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to receive bytes over tcp, err %v", err)
+			return err
 		}
 		fmt.Println(n, "bytes were received from client")
-		fd.WriteAt(buf, offset)
-		offset += int64(uh.h.ChunkSize)
+		_, err = fd.WriteAt(temp.Bytes(), offset)
+		if err != nil {
+			return err
+		}
+		offset += int64(sz)
 	}
 	return nil
 }

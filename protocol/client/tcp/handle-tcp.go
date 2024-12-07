@@ -3,11 +3,13 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/client"
 	"github.com/souravbiswassanto/concurrent-file-server/internal/util"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 )
@@ -50,44 +52,73 @@ func (uh *UploadHandler) HandleConn() error {
 		}
 	}()
 
-	_, err = io.Copy(conn, bytes.NewReader(uh.h.Serialize()))
+	err = uh.Handshake(conn)
 	if err != nil {
 		return err
-	}
-	// receive ack
-	temp := make([]byte, 4)
-	_, err = io.Copy(bytes.NewBuffer(temp), conn)
-	if err != nil {
-		return err
-	}
-	if !validateAck(temp) {
-		return fmt.Errorf("invalid response received from server")
 	}
 
-	offset := uint64(0)
-	for i := uint64(0); i <= uh.h.Reps; i++ {
-		buf := make([]byte, uh.h.ChunkSize)
-		n, err := fd.ReadAt(buf, int64(offset))
-		if err != nil && err != io.EOF {
-			return err
-		}
-		_, err = io.Copy(conn, bytes.NewReader(buf))
-		if err != nil {
-			return err
-		}
-		log.Println(n, "bytes sent to server over network")
+	err = uh.SetupHeader(conn)
+	if err != nil {
+		return err
+	}
+
+	return uh.HandleSend(conn, fd)
+}
+
+func (uh *UploadHandler) Handshake(conn *net.TCPConn) error {
+	temp := []byte{1, 1, 1, 1}
+	_, err := conn.Write(temp)
+	if err != nil {
+		return err
+	}
+	temp = make([]byte, 4)
+	n, err := conn.Read(temp)
+	if err != nil {
+		return err
+	}
+	if n != 4 {
+		return fmt.Errorf("wrong header received")
 	}
 	return nil
 }
 
-func validateAck(res []byte) bool {
-	if len(res) != 4 {
-		return false
+func (uh *UploadHandler) SetupHeader(conn *net.TCPConn) error {
+	headerBuf := make([]byte, 4)
+	var buf []byte
+	buf = uh.h.Serialize()
+	binary.BigEndian.PutUint32(headerBuf, uint32(len(buf)))
+	_, err := conn.Write(headerBuf)
+	if err != nil {
+		return err
 	}
-	for i := 0; i < 4; i++ {
-		if res[i] != byte(1) {
-			return false
+	fmt.Println(len(buf), uh.h.FileSize)
+	_, err = io.CopyN(conn, bytes.NewReader(buf), int64(len(buf)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (uh *UploadHandler) HandleSend(conn *net.TCPConn, fd *os.File) error {
+	offset := uint64(0)
+	sz := uint64(0)
+	for i := uint64(0); i <= uh.h.Reps; i++ {
+		sz = uint64(uh.h.ChunkSize)
+		if i == uh.h.Reps {
+			sz = uh.h.FileSize % uint64(uh.h.ChunkSize)
 		}
+		log.Println(i, sz)
+		buf := make([]byte, sz)
+		n, err := fd.ReadAt(buf, int64(offset))
+		if err != nil && err != io.EOF {
+			return err
+		}
+		_, err = io.CopyN(conn, bytes.NewReader(buf), int64(sz))
+		if err != nil {
+			return err
+		}
+		log.Println(n, "bytes sent to server over network")
+		offset += sz
 	}
-	return true
+	return nil
 }
